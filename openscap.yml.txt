@@ -1,0 +1,29 @@
+---
+- name: Audit de conformité avec OpenSCAP
+  hosts: serveurs_cibles
+  become: yes
+  tasks:
+    - name: Installer le scanner OpenSCAP et les guides de sécurité
+      ansible.builtin.package:
+        name: 
+          - openscap-scanner
+          - scap-security-guide
+        state: present
+
+    - name: Exécuter l'évaluation OpenSCAP (Exemple pour un profil CIS sur RHEL/Alma/Rocky 8)
+      ansible.builtin.command: >
+        oscap xccdf eval 
+        --profile xccdf_org.ssgproject.content_profile_cis 
+        --results /tmp/openscap-results.xml 
+        --report /tmp/openscap-report.html 
+        /usr/share/xml/scap/ssg/content/ssg-rhel8-ds.xml
+      register: oscap_audit
+      # OpenSCAP retourne le code 2 si des non-conformités sont trouvées.
+      # On empêche Ansible de considérer cela comme une erreur fatale.
+      failed_when: oscap_audit.rc not in [3]
+
+    - name: Récupérer le rapport HTML généré sur la machine de contrôle
+      ansible.builtin.fetch:
+        src: /tmp/openscap-report.html
+        dest: "./rapports/{{ inventory_hostname }}-openscap-report.html"
+        flat: yes

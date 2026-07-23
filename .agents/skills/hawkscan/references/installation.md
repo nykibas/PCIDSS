@@ -1,0 +1,129 @@
+# HawkScan Installation Reference
+
+**Minimum hawk version:** This skill calls `hawk config show <section>` for live config documentation. You need hawk **v5.5.11** or later. Verify with:
+
+```bash
+hawk version
+hawk config --help
+```
+
+If `hawk config` is unrecognized, upgrade hawk before running this skill.
+
+## Contents
+- [CLI Installation](#cli-installation)
+  - [Homebrew (macOS)](#homebrew-macos--recommended)
+  - [Package Installers (All Platforms)](#package-installers-all-platforms)
+  - [Prerequisites](#prerequisites)
+  - [Verify Installation](#verify-installation)
+- [Post-Install Setup](#post-install-setup)
+  - [Authenticate with hawk init](#authenticate-with-hawk-init)
+  - [CI/CD: Set HAWK_API_KEY as a Secret](#cicd-set-hawk_api_key-as-a-secret)
+- [Docker (Alternative to CLI)](#docker-alternative-to-cli)
+
+---
+
+## CLI Installation
+
+### Homebrew (macOS — Recommended)
+
+```bash
+brew tap stackhawk/cli
+brew install hawk
+```
+
+### Package Installers (All Platforms)
+
+Downloads page: https://docs.stackhawk.com/downloads/
+
+Check the current version:
+```bash
+curl -s https://api.stackhawk.com/hawkscan/version
+# → 5.5.0
+```
+
+**macOS — PKG installer (includes bundled Java, recommended):**
+```bash
+HAWK_VERSION=$(curl -s https://api.stackhawk.com/hawkscan/version)
+curl -Lo hawk.pkg "https://download.stackhawk.com/hawk/pkg/hawk-${HAWK_VERSION}.pkg"
+sudo installer -pkg hawk.pkg -target /Applications
+```
+
+**Windows — MSI installer (includes bundled Java):**
+```powershell
+$version = Invoke-RestMethod https://api.stackhawk.com/hawkscan/version
+msiexec.exe /i "https://download.stackhawk.com/hawk/msi/hawk-${version}.msi" /passive
+```
+
+**Linux / All Platforms — ZIP (requires Java 17+ installed separately):**
+```bash
+HAWK_VERSION=$(curl -s https://api.stackhawk.com/hawkscan/version)
+curl -Lo hawk.zip "https://download.stackhawk.com/hawk/cli/hawk-${HAWK_VERSION}.zip"
+unzip hawk.zip
+echo "export PATH=\$HOME/hawk-${HAWK_VERSION}:\$PATH" >> ~/.zshrc && source ~/.zshrc
+```
+
+Direct download URL patterns (substitute version):
+- macOS PKG: `https://download.stackhawk.com/hawk/pkg/hawk-{VERSION}.pkg`
+- Windows MSI: `https://download.stackhawk.com/hawk/msi/hawk-{VERSION}.msi`
+- ZIP (all): `https://download.stackhawk.com/hawk/cli/hawk-{VERSION}.zip`
+
+### Prerequisites
+
+- **Java 17 or higher** is required
+- macOS and Windows installers bundle Java automatically
+- Linux users may need to install Java separately
+
+### Verify Installation
+
+```bash
+hawk version
+```
+
+---
+
+## Post-Install Setup
+
+### Authenticate with `hawk init`
+
+```bash
+hawk init
+```
+
+When prompted, enter your StackHawk API key (format: `hawk.xxxxxxxxxx.xxxxxxxxxx`).
+This saves the key to `~/.hawk/hawk.properties`.
+
+**To get an API key:**
+1. Log into https://app.stackhawk.com
+2. Go to Settings → API Keys
+3. Create or copy an existing key (keys only display once on creation)
+
+### CI/CD: Set `HAWK_API_KEY` as a Secret
+
+For pipeline runs where `hawk init` cannot be used interactively, set `HAWK_API_KEY` as a
+CI secret and prefix each invocation:
+
+```bash
+API_KEY=$HAWK_API_KEY hawk scan
+```
+
+The CLI resolves keys in this order: `--api-key` flag → `API_KEY` env var → `~/.hawk/hawk.properties`.
+
+For local/agentic use, `hawk init` is the preferred approach — no env var needed.
+
+---
+
+## Docker (Alternative to CLI)
+
+If you prefer Docker over the CLI:
+
+```bash
+docker pull stackhawk/hawkscan:latest
+```
+
+No Java or CLI installation needed. See `references/docker-usage.md` for run commands.
+
+**Trade-offs:**
+- Docker requires `--network host` (Linux) or `host.docker.internal` (Mac/Windows) to
+  reach apps on localhost
+- CLI is faster for local iteration and has simpler localhost networking
+- Docker is better for CI environments that already have Docker available

@@ -1,0 +1,82 @@
+---
+- name: Bootstrap SSH Access - Linux Servers
+  hosts: linux
+  become: yes
+  vars:
+    ansible_svc_user: "ladmin"
+    ansible_pub_key: "{{ lookup('file', '~/.ssh/id_rsa.pub') | default('ssh-rsa AAAAB3... ReplaceWithRealKey AAP', true) }}"
+
+  tasks:
+    - name: Ensure service account exists
+      user:
+        name: "{{ ansible_svc_user }}"
+        state: present
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Deploy SSH public key for service account
+      authorized_key:
+        user: "{{ ansible_svc_user }}"
+        state: present
+        key: "{{ ansible_pub_key }}"
+
+    - name: Grant NOPASSWD sudo access to service account
+      copy:
+        content: "{{ ansible_svc_user }} ALL=(ALL) NOPASSWD: ALL"
+        dest: "/etc/sudoers.d/{{ ansible_svc_user }}"
+        mode: "0440"
+        validate: "visudo -cf %s"
+
+
+- name: Bootstrap SSH Access - Windows Servers
+  hosts: windows
+  vars:
+    ansible_svc_user: "ladmin"
+    ansible_pub_key: "{{ lookup('file', '~/.ssh/id_rsa.pub') | default('ssh-rsa AAAAB3... ReplaceWithRealKey AAP', true) }}"
+  
+  tasks:
+    - name: Ensure OpenSSH Server is installed
+      win_capability:
+        name: OpenSSH.Server~~~~0.0.1.0
+        state: present
+
+    - name: Ensure OpenSSH service is running and set to autostart
+      win_service:
+        name: sshd
+        state: started
+        start_mode: auto
+
+    - name: Set DefaultShell to PowerShell
+      win_regedit:
+        path: HKLM:\SOFTWARE\OpenSSH
+        name: DefaultShell
+        data: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        type: string
+        state: present
+
+    - name: Ensure service account is in local Administrators group
+      win_group_membership:
+        name: Administrators
+        members:
+          - "{{ ansible_svc_user }}"
+        state: present
+
+    - name: Ensure SSH ProgramData directory exists
+      win_file:
+        path: C:\ProgramData\ssh
+        state: directory
+
+    - name: Deploy SSH key to administrators_authorized_keys
+      win_copy:
+        content: "{{ ansible_pub_key }}\r\n"
+        dest: C:\ProgramData\ssh\administrators_authorized_keys
+
+    - name: Secure administrators_authorized_keys ACLs (Required by OpenSSH)
+      win_shell: |
+        $acl = Get-Acl C:\ProgramData\ssh\administrators_authorized_keys
+        $acl.SetAccessRuleProtection($true, $false)
+        $administratorsRule = New-Object system.security.accesscontrol.filesystemaccessrule("Administrators","FullControl","Allow")
+        $systemRule = New-Object system.security.accesscontrol.filesystemaccessrule("SYSTEM","FullControl","Allow")
+        $acl.SetAccessRule($administratorsRule)
+        $acl.SetAccessRule($systemRule)
+        Set-Acl -Path C:\ProgramData\ssh\administrators_authorized_keys -AclObject $acl

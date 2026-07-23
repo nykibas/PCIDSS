@@ -1,0 +1,31 @@
+# RMAN Backup script: Full Backup (Level 0) + Archivelogs Purge
+# Run using: rman target / cmdfile=backup_full.rman log=backup_full.log
+
+RUN {
+  # Allocate channels for parallel backup
+  ALLOCATE CHANNEL ch1 DEVICE TYPE DISK;
+  ALLOCATE CHANNEL ch2 DEVICE TYPE DISK;
+
+  # Backup database level 0
+  BACKUP INCREMENTAL LEVEL 0
+    DATABASE
+    FORMAT '/backup/ora_df_%d_%U_%T.bak'
+    TAG 'DB_FULL_LEVEL0';
+
+  # Switch current logfile to ensure we have everything archived
+  SQL 'ALTER SYSTEM SWITCH LOGFILE';
+
+  # Backup and delete archivelogs
+  BACKUP
+    ARCHIVELOG ALL
+    FORMAT '/backup/ora_al_%d_%U_%T.bak'
+    DELETE INPUT
+    TAG 'ARCHIVELOGS_BACKUP';
+
+  # Delete obsolete backups based on retention policy
+  DELETE NOPROMPT OBSOLETE;
+
+  # Release channels
+  RELEASE CHANNEL ch1;
+  RELEASE CHANNEL ch2;
+}

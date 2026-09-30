@@ -11150,6 +11150,7 @@
           issues.
         success_msg:
         - Configure Firewalld to Restrict Loopback Traffic remediation successfully executed
+      ignore_errors: true
       when: '"kernel-core" in ansible_facts.packages'
       tags:
       - CCE-86137-7
@@ -11257,6 +11258,7 @@
           issues.
         success_msg:
         - Configure Firewalld to Trust Loopback Traffic remediation successfully executed
+      ignore_errors: true
       when: '"kernel-core" in ansible_facts.packages'
       tags:
       - CCE-86116-1

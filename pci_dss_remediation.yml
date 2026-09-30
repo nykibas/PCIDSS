@@ -11017,6 +11017,7 @@
           enabled: true
           state: started
           masked: false
+        ignore_errors: true
         when:
         - '"firewalld" in ansible_facts.packages'
       tags:

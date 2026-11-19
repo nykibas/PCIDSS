@@ -19,26 +19,9 @@
       Les variables vCenter (VMWARE_HOST, VMWARE_USER, VMWARE_PASSWORD) ou
       les paramètres VM (wazuh_vm_name, wazuh_vm_ip) sont manquants.
 
-- name: "Récupérer les hôtes ESXi du cluster {{ vcenter_cluster }} (si défini)"
-  community.vmware.vmware_cluster_info:
-    hostname: "{{ vcenter_hostname }}"
-    username: "{{ vcenter_username }}"
-    password: "{{ vcenter_password }}"
-    validate_certs: "{{ vcenter_validate_certs }}"
-    datacenter: "{{ vcenter_datacenter }}"
-    cluster_name: "{{ vcenter_cluster }}"
-  register: cluster_info
-  when: vcenter_cluster | default('') | length > 0
-
-- name: "Déterminer la liste des hôtes ESXi candidats (cluster ou hôtes standalone HQDCKN)"
+- name: "Déterminer la liste des hôtes ESXi candidats dans {{ vcenter_datacenter }}"
   ansible.builtin.set_fact:
-    candidate_esxi_hosts: >-
-      {{
-        (cluster_info.clusters[vcenter_cluster].hosts | map(attribute='name') | list)
-        if (vcenter_cluster | default('') | length > 0
-            and cluster_info.clusters[vcenter_cluster].hosts | default([]) | length > 0)
-        else vcenter_esxi_hosts
-      }}
+    candidate_esxi_hosts: "{{ vcenter_esxi_hosts }}"
 
 - name: "Vérifier qu'au moins un hôte ESXi candidat est disponible"
   ansible.builtin.assert:

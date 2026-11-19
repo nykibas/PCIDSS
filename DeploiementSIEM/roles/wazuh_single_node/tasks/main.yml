@@ -69,40 +69,40 @@
   changed_when: false
 
 - name: "Mettre à jour les mots de passe dans docker-compose.yml, internal_users.yml et wazuh.yml"
-  ansible.builtin.command:
-    cmd: python3 -c "
-      import os, re
-      base = os.environ['WAZUH_DIR']
-      dc_path = os.path.join(base, 'docker-compose.yml')
-      iu_path = os.path.join(base, 'config', 'wazuh_indexer', 'internal_users.yml')
-      wy_path = os.path.join(base, 'config', 'wazuh_dashboard', 'wazuh.yml')
+  ansible.builtin.shell: |
+    python3 - << 'PYEOF'
+    import os, re
+    base = os.environ['WAZUH_DIR']
+    dc_path = os.path.join(base, 'docker-compose.yml')
+    iu_path = os.path.join(base, 'config', 'wazuh_indexer', 'internal_users.yml')
+    wy_path = os.path.join(base, 'config', 'wazuh_dashboard', 'wazuh.yml')
 
-      dc = open(dc_path, encoding='utf-8').read()
-      iu = open(iu_path, encoding='utf-8').read()
-      wy = open(wy_path, encoding='utf-8').read()
+    dc = open(dc_path, encoding='utf-8').read()
+    iu = open(iu_path, encoding='utf-8').read()
+    wy = open(wy_path, encoding='utf-8').read()
 
-      idx_pw = os.environ.get('NEW_IDX_PW', '')
-      idx_lines = [l.strip() for l in os.environ.get('NEW_IDX_HASH', '').splitlines() if l.strip().startswith('$2')]
-      idx_hash = idx_lines[-1] if idx_lines else ''
-      api_pw = os.environ.get('NEW_API_PW', '')
-      dash_pw = os.environ.get('NEW_DASH_PW', '')
-      dash_lines = [l.strip() for l in os.environ.get('NEW_DASH_HASH', '').splitlines() if l.strip().startswith('$2')]
-      dash_hash = dash_lines[-1] if dash_lines else ''
+    idx_pw = os.environ.get('NEW_IDX_PW', '')
+    idx_lines = [l.strip() for l in os.environ.get('NEW_IDX_HASH', '').splitlines() if l.strip().startswith('$2')]
+    idx_hash = idx_lines[-1] if idx_lines else ''
+    api_pw = os.environ.get('NEW_API_PW', '')
+    dash_pw = os.environ.get('NEW_DASH_PW', '')
+    dash_lines = [l.strip() for l in os.environ.get('NEW_DASH_HASH', '').splitlines() if l.strip().startswith('$2')]
+    dash_hash = dash_lines[-1] if dash_lines else ''
 
-      if idx_pw and idx_hash:
-          dc = dc.replace('INDEXER_PASSWORD=SecretPassword', 'INDEXER_PASSWORD=' + idx_pw)
-          iu = re.sub(r'(?m)(^admin:\s*\n\s*hash:\s*)\"[^\"]*\"', lambda m: m.group(1) + '\"' + idx_hash + '\"', iu)
-      if dash_pw and dash_hash:
-          dc = dc.replace('DASHBOARD_PASSWORD=kibanaserver', 'DASHBOARD_PASSWORD=' + dash_pw)
-          iu = re.sub(r'(?m)(^kibanaserver:\s*\n\s*hash:\s*)\"[^\"]*\"', lambda m: m.group(1) + '\"' + dash_hash + '\"', iu)
-      if api_pw:
-          dc = dc.replace('API_PASSWORD=MyS3cr37P450r.*-', 'API_PASSWORD=' + api_pw)
-          wy = wy.replace('MyS3cr37P450r.*-', api_pw)
+    if idx_pw and idx_hash:
+        dc = dc.replace('INDEXER_PASSWORD=SecretPassword', 'INDEXER_PASSWORD=' + idx_pw)
+        iu = re.sub(r'(?m)(^admin:\s*\n\s*hash:\s*)"[^"]*"', lambda m: m.group(1) + '"' + idx_hash + '"', iu)
+    if dash_pw and dash_hash:
+        dc = dc.replace('DASHBOARD_PASSWORD=kibanaserver', 'DASHBOARD_PASSWORD=' + dash_pw)
+        iu = re.sub(r'(?m)(^kibanaserver:\s*\n\s*hash:\s*)"[^"]*"', lambda m: m.group(1) + '"' + dash_hash + '"', iu)
+    if api_pw:
+        dc = dc.replace('API_PASSWORD=MyS3cr37P450r.*-', 'API_PASSWORD=' + api_pw)
+        wy = wy.replace('MyS3cr37P450r.*-', api_pw)
 
-      open(dc_path, 'w', encoding='utf-8').write(dc)
-      open(iu_path, 'w', encoding='utf-8').write(iu)
-      open(wy_path, 'w', encoding='utf-8').write(wy)
-      "
+    open(dc_path, 'w', encoding='utf-8').write(dc)
+    open(iu_path, 'w', encoding='utf-8').write(iu)
+    open(wy_path, 'w', encoding='utf-8').write(wy)
+    PYEOF
   environment:
     WAZUH_DIR: "{{ wazuh_single_node_dir }}"
     NEW_IDX_PW: "{{ wazuh_indexer_admin_password }}"

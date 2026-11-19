@@ -15,6 +15,7 @@ Crée ou met à jour :
 import os
 import sys
 import ssl
+import time
 import json
 import base64
 import urllib.request
@@ -217,6 +218,20 @@ def main():
     else:
         proj = aap.req("POST", "projects/", proj_payload)
         print(f"[OK] Project cree : id={proj['id']} ({proj_name})")
+
+    # Synchroniser le projet Git et attendre la fin avant de creer le Job Template
+    print(f"[..] Synchronisation du projet AAP id={proj['id']} depuis GitHub...")
+    upd = aap.req("POST", f"projects/{proj['id']}/update/")
+    upd_id = upd.get("project_update") or upd.get("id")
+    for _ in range(60):
+        st = aap.req("GET", f"project_updates/{upd_id}/")
+        status = st.get("status")
+        if status in ("successful", "failed", "error", "canceled"):
+            print(f"[OK] Synchro projet terminee : status={status}")
+            if status != "successful":
+                raise RuntimeError(f"Echec synchro projet {proj['id']}: {st.get('job_explanation')}")
+            break
+        time.sleep(3)
 
     # 5. Job Template : Deploiement SIEM Wazuh (Single-Node)
     jt_name = "Deploiement SIEM Wazuh (Single-Node)"

@@ -1,0 +1,129 @@
+---
+# =============================================================================
+# Rôle : wazuh_single_node
+# Configure le noyau, firewalld, SELinux, déploie Wazuh (Indexer, Manager,
+# Dashboard) via Docker Compose v2 et valide la disponibilité du Dashboard.
+# =============================================================================
+
+# --- Étape 1 : Tuning Noyau (OpenSearch / Wazuh Indexer) ---
+- name: "Appliquer vm.max_map_count=262144 de manière persistante"
+  ansible.posix.sysctl:
+    name: vm.max_map_count
+    value: "262144"
+    sysctl_file: /etc/sysctl.d/99-wazuh.conf
+    state: present
+    reload: true
+
+# --- Étape 2 : Pare-feu firewalld ---
+- name: "S'assurer que firewalld est activé et démarré"
+  ansible.builtin.systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+- name: "Ouvrir les ports requis pour Wazuh dans firewalld"
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ wazuh_firewall_ports }}"
+
+# --- Étape 3 : Récupération du dépôt officiel wazuh-docker ---
+- name: "Cloner le dépôt officiel wazuh-docker (version {{ wazuh_version }})"
+  ansible.builtin.git:
+    repo: "{{ wazuh_repo_url }}"
+    dest: "{{ wazuh_install_dir }}"
+    version: "{{ wazuh_version }}"
+    force: false
+
+- name: "Ajuster la mémoire JVM OpenSearch ({{ wazuh_indexer_java_opts }}) dans docker-compose.yml"
+  ansible.builtin.replace:
+    path: "{{ wazuh_single_node_dir }}/docker-compose.yml"
+    regexp: 'OPENSEARCH_JAVA_OPTS=-Xms\w+\s+-Xmx\w+'
+    replace: "OPENSEARCH_JAVA_OPTS={{ wazuh_indexer_java_opts }}"
+
+# --- Étape 4 : Durcissement optionnel des secrets (injectés via AAP Credentials) ---
+- name: "Mettre à jour le mot de passe Indexer dans docker-compose.yml si fourni"
+  ansible.builtin.replace:
+    path: "{{ wazuh_single_node_dir }}/docker-compose.yml"
+    regexp: 'INDEXER_PASSWORD=SecretPassword'
+    replace: "INDEXER_PASSWORD={{ wazuh_indexer_admin_password }}"
+  when: wazuh_indexer_admin_password | length > 0
+  no_log: true
+
+- name: "Mettre à jour le mot de passe API Wazuh dans docker-compose.yml si fourni"
+  ansible.builtin.replace:
+    path: "{{ wazuh_single_node_dir }}/docker-compose.yml"
+    regexp: 'API_PASSWORD=MyS3cr37P450r\.\*-'
+    replace: "API_PASSWORD={{ wazuh_api_password }}"
+  when: wazuh_api_password | length > 0
+  no_log: true
+
+- name: "Mettre à jour le mot de passe Dashboard dans docker-compose.yml si fourni"
+  ansible.builtin.replace:
+    path: "{{ wazuh_single_node_dir }}/docker-compose.yml"
+    regexp: 'DASHBOARD_PASSWORD=kibanaserver'
+    replace: "DASHBOARD_PASSWORD={{ wazuh_dashboard_password }}"
+  when: wazuh_dashboard_password | length > 0
+  no_log: true
+
+# --- Étape 5 : Génération idempotente des certificats SSL internes ---
+- name: "Vérifier si les certificats SSL Wazuh Indexer existent déjà"
+  ansible.builtin.stat:
+    path: "{{ wazuh_single_node_dir }}/config/wazuh_indexer_ssl_certs/root-ca.pem"
+  register: wazuh_certs_stat
+
+- name: "Générer les certificats SSL internes Wazuh"
+  ansible.builtin.command:
+    cmd: docker compose -f generate-indexer-certs.yml run --rm generator
+    chdir: "{{ wazuh_single_node_dir }}"
+  when: not wazuh_certs_stat.stat.exists
+
+- name: "Appliquer le contexte SELinux container_file_t sur le répertoire config (RHEL Enforcing)"
+  ansible.builtin.command:
+    cmd: "chcon -Rt container_file_t {{ wazuh_single_node_dir }}/config"
+  when:
+    - ansible_selinux is defined
+    - ansible_selinux.status == "enabled"
+  changed_when: false
+
+# --- Étape 6 : Démarrage de la stack Wazuh ---
+- name: "Démarrer la stack Wazuh Single-Node via Docker Compose v2"
+  community.docker.docker_compose_v2:
+    project_src: "{{ wazuh_single_node_dir }}"
+    state: present
+    pull: missing
+  register: wazuh_compose_output
+
+# --- Étape 7 : Vérifications post-déploiement (Healthcheck) ---
+- name: "Attendre que le Wazuh Dashboard réponde sur https://127.0.0.1:443 (jusqu'à 4 min)"
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:443"
+    method: GET
+    validate_certs: false
+    status_code:
+      - 200
+      - 302
+  register: wazuh_healthcheck
+  retries: 24
+  delay: 10
+  until: wazuh_healthcheck.status in [200, 302]
+
+- name: "Vérifier l'état des conteneurs Wazuh (docker compose ps)"
+  ansible.builtin.command:
+    cmd: docker compose ps
+    chdir: "{{ wazuh_single_node_dir }}"
+  register: wazuh_containers_status
+  changed_when: false
+
+- name: "Afficher le récapitulatif du déploiement SIEM Wazuh"
+  ansible.builtin.debug:
+    msg:
+      - "Déploiement SIEM Wazuh {{ wazuh_version }} terminé avec succès !"
+      - "VM provisionnée : {{ inventory_hostname }} ({{ ansible_host }})"
+      - "Hôte ESXi optimal retenu : {{ wazuh_selected_esxi | default('N/A') }}"
+      - "Datastore retenu : {{ wazuh_selected_datastore | default('N/A') }}"
+      - "URL Wazuh Dashboard : https://{{ ansible_host }}"
+      - "Statut des conteneurs :"
+      - "{{ wazuh_containers_status.stdout_lines }}"

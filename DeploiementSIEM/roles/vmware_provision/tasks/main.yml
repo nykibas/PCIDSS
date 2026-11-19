@@ -1,0 +1,242 @@
+---
+# =============================================================================
+# Rôle : vmware_provision
+# Sélectionne l'hôte ESXi le plus optimal (RAM/CPU) dans le cluster ou parmi
+# les hôtes standalone du datacenter HQDCKN, sélectionne le meilleur datastore
+# attaché à cet hôte si "auto", clone le template RHEL 9 avec disque dédié
+# Docker (100 Go) et IP statique, puis ajoute la VM dans l'inventaire en mémoire.
+# =============================================================================
+
+- name: "Vérifier que les identifiants vCenter et paramètres VM sont renseignés"
+  ansible.builtin.assert:
+    that:
+      - vcenter_hostname | length > 0
+      - vcenter_username | length > 0
+      - vcenter_password | length > 0
+      - wazuh_vm_name | length > 0
+      - wazuh_vm_ip | length > 0
+    fail_msg: >-
+      Les variables vCenter (VMWARE_HOST, VMWARE_USER, VMWARE_PASSWORD) ou
+      les paramètres VM (wazuh_vm_name, wazuh_vm_ip) sont manquants.
+
+- name: "Récupérer les hôtes ESXi du cluster {{ vcenter_cluster }} (si défini)"
+  community.vmware.vmware_cluster_info:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    datacenter: "{{ vcenter_datacenter }}"
+    cluster_name: "{{ vcenter_cluster }}"
+  register: cluster_info
+  when: vcenter_cluster | default('') | length > 0
+
+- name: "Déterminer la liste des hôtes ESXi candidats (cluster ou hôtes standalone HQDCKN)"
+  ansible.builtin.set_fact:
+    candidate_esxi_hosts: >-
+      {{
+        (cluster_info.clusters[vcenter_cluster].hosts | map(attribute='name') | list)
+        if (vcenter_cluster | default('') | length > 0
+            and cluster_info.clusters[vcenter_cluster].hosts | default([]) | length > 0)
+        else vcenter_esxi_hosts
+      }}
+
+- name: "Vérifier qu'au moins un hôte ESXi candidat est disponible"
+  ansible.builtin.assert:
+    that:
+      - candidate_esxi_hosts | length > 0
+    fail_msg: "Aucun hôte ESXi candidat trouvé dans {{ vcenter_datacenter }}."
+
+- name: "Collecter les métriques temps réel (CPU, RAM, état) de chaque hôte ESXi"
+  community.vmware.vmware_host_facts:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    esxi_hostname: "{{ item }}"
+    schema: vsphere
+    properties:
+      - summary.hardware
+      - summary.quickStats
+      - summary.runtime
+  loop: "{{ candidate_esxi_hosts }}"
+  register: esxi_metrics_raw
+
+- name: "Calculer le score d'optimalité (RAM {{ (esxi_score_weight_ram * 100) | int }}% / CPU {{ (esxi_score_weight_cpu * 100) | int }}%) pour chaque ESXi éligible"
+  ansible.builtin.set_fact:
+    esxi_candidates: "{{ esxi_candidates | default([]) + [candidate] }}"
+  vars:
+    rt: "{{ item.ansible_facts.summary.runtime }}"
+    hw: "{{ item.ansible_facts.summary.hardware }}"
+    qs: "{{ item.ansible_facts.summary.quickStats }}"
+    mem_total_mb: "{{ (hw.memorySize | float / 1048576.0) | round(0) }}"
+    mem_used_mb: "{{ (qs.overallMemoryUsage | default(0) | float) }}"
+    mem_free_mb: "{{ (mem_total_mb | float - mem_used_mb | float) | round(0) }}"
+    mem_free_ratio: "{{ (mem_free_mb | float / mem_total_mb | float) if (mem_total_mb | float > 0) else 0 }}"
+    cpu_total_mhz: "{{ ((hw.cpuMhz | default(2000) | float) * (hw.numCpuCores | default(1) | float)) }}"
+    cpu_used_mhz: "{{ (qs.overallCpuUsage | default(0) | float) }}"
+    cpu_free_mhz: "{{ [cpu_total_mhz | float - cpu_used_mhz | float, 0] | max }}"
+    cpu_free_ratio: "{{ (cpu_free_mhz | float / cpu_total_mhz | float) if (cpu_total_mhz | float > 0) else 0 }}"
+    composite_score: "{{ ((mem_free_ratio | float * esxi_score_weight_ram | float) + (cpu_free_ratio | float * esxi_score_weight_cpu | float)) | round(4) }}"
+    candidate:
+      name: "{{ item.item }}"
+      mem_free_mb: "{{ mem_free_mb | int }}"
+      mem_free_pct: "{{ (mem_free_ratio | float * 100) | round(1) }}"
+      cpu_free_pct: "{{ (cpu_free_ratio | float * 100) | round(1) }}"
+      score: "{{ composite_score | float }}"
+  loop: "{{ esxi_metrics_raw.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - rt.connectionState == 'connected'
+    - not (rt.inMaintenanceMode | bool)
+    - (mem_free_mb | float) >= (wazuh_vm_ram_mb | float + 2048)
+
+- name: "Vérifier qu'au moins un hôte ESXi est éligible (connecté, hors maintenance, RAM suffisante)"
+  ansible.builtin.assert:
+    that:
+      - esxi_candidates is defined
+      - esxi_candidates | length > 0
+    fail_msg: >-
+      Aucun hôte ESXi éligible dans {{ vcenter_datacenter }}
+      (minimum requis : {{ wazuh_vm_ram_mb | int + 2048 }} Mo RAM libre, hors maintenance).
+
+- name: "Sélectionner l'hôte ESXi le plus optimal"
+  ansible.builtin.set_fact:
+    esxi_candidates_sorted: "{{ esxi_candidates | sort(attribute='score', reverse=true) }}"
+    selected_esxi_host: "{{ (esxi_candidates | sort(attribute='score', reverse=true) | first).name }}"
+
+- name: "Afficher le classement des hôtes ESXi et l'hôte retenu"
+  ansible.builtin.debug:
+    msg:
+      selected_esxi_host: "{{ selected_esxi_host }}"
+      ranking: "{{ esxi_candidates_sorted }}"
+
+# --- Sélection automatique du Datastore monté sur l'ESXi retenu ---
+- name: "Sélectionner automatiquement le datastore avec le plus d'espace libre sur {{ selected_esxi_host }}"
+  when: vcenter_datastore == 'auto' or vcenter_datastore | length == 0
+  block:
+    - name: "Lister les datastores accessibles sur l'hôte ESXi {{ selected_esxi_host }}"
+      community.vmware.vmware_datastore_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        esxi_hostname: "{{ selected_esxi_host }}"
+      register: datastore_info
+
+    - name: "Filtrer les datastores éligibles (espace libre >= {{ wazuh_vm_data_disk_gb | int + 60 }} Go)"
+      ansible.builtin.set_fact:
+        eligible_datastores: >-
+          {{
+            datastore_info.datastores
+            | selectattr('accessible', 'equalto', true)
+            | selectattr('maintenanceMode', 'equalto', 'normal')
+            | selectattr('freeSpace', 'ge', ((wazuh_vm_data_disk_gb | int + 60) * 1073741824))
+            | sort(attribute='freeSpace', reverse=true)
+            | list
+          }}
+
+    - name: "Vérifier qu'un datastore dispose d'assez d'espace libre sur {{ selected_esxi_host }}"
+      ansible.builtin.assert:
+        that:
+          - eligible_datastores | length > 0
+        fail_msg: >-
+          Aucun datastore accessible sur {{ selected_esxi_host }} avec au moins
+          {{ wazuh_vm_data_disk_gb | int + 60 }} Go libres.
+
+    - name: "Retenir le datastore optimal"
+      ansible.builtin.set_fact:
+        selected_datastore: "{{ eligible_datastores[0].name }}"
+
+- name: "Utiliser le datastore spécifié manuellement"
+  ansible.builtin.set_fact:
+    selected_datastore: "{{ vcenter_datastore }}"
+  when: vcenter_datastore != 'auto' and vcenter_datastore | length > 0
+
+- name: "Afficher le datastore retenu"
+  ansible.builtin.debug:
+    msg: "Datastore sélectionné sur {{ selected_esxi_host }} : {{ selected_datastore }}"
+
+# --- Provisioning de la VM RHEL 9 depuis le template ---
+- name: "Cloner le template {{ vcenter_template_name }} vers {{ wazuh_vm_name }} (état éteint pour ajout disque)"
+  community.vmware.vmware_guest:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    datacenter: "{{ vcenter_datacenter }}"
+    cluster: "{{ vcenter_cluster | default(omit, true) }}"
+    esxi_hostname: "{{ selected_esxi_host }}"
+    folder: "{{ vcenter_folder }}"
+    name: "{{ wazuh_vm_name }}"
+    template: "{{ vcenter_template_name }}"
+    datastore: "{{ selected_datastore }}"
+    state: poweredoff
+    hardware:
+      memory_mb: "{{ wazuh_vm_ram_mb | int }}"
+      num_cpus: "{{ wazuh_vm_vcpu | int }}"
+      scsi: paravirtual
+    networks:
+      - name: "{{ vcenter_network }}"
+        type: static
+        ip: "{{ wazuh_vm_ip }}"
+        netmask: "{{ wazuh_vm_netmask }}"
+        gateway: "{{ wazuh_vm_gateway }}"
+        dns_servers: "{{ wazuh_vm_dns_servers }}"
+        domain: "{{ wazuh_vm_domain }}"
+        start_connected: true
+    customization:
+      hostname: "{{ wazuh_vm_name }}"
+      domain: "{{ wazuh_vm_domain }}"
+      dns_servers: "{{ wazuh_vm_dns_servers }}"
+      timezone: "{{ wazuh_vm_timezone }}"
+  register: vm_clone_result
+
+- name: "Attacher le disque dédié {{ wazuh_vm_data_disk_gb }} Go pour {{ docker_data_mount }}"
+  community.vmware.vmware_guest_disk:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    datacenter: "{{ vcenter_datacenter }}"
+    name: "{{ wazuh_vm_name }}"
+    folder: "{{ vcenter_folder }}"
+    disk:
+      - size_gb: "{{ wazuh_vm_data_disk_gb | int }}"
+        type: thin
+        datastore: "{{ selected_datastore }}"
+        state: present
+        scsi_controller: 0
+        unit_number: 1
+        scsi_type: paravirtual
+
+- name: "Démarrer la VM {{ wazuh_vm_name }} et attendre l'adresse IP {{ wazuh_vm_ip }}"
+  community.vmware.vmware_guest:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: "{{ vcenter_validate_certs }}"
+    datacenter: "{{ vcenter_datacenter }}"
+    folder: "{{ vcenter_folder }}"
+    name: "{{ wazuh_vm_name }}"
+    state: poweredon
+    wait_for_ip_address: true
+    wait_for_ip_address_timeout: 300
+
+- name: "Attendre que le port SSH (22) soit joignable sur {{ wazuh_vm_ip }}"
+  ansible.builtin.wait_for:
+    host: "{{ wazuh_vm_ip }}"
+    port: 22
+    delay: 10
+    timeout: 300
+    state: started
+
+- name: "Enregistrer la VM dans l'inventaire dynamique en mémoire (groupe wazuh_target)"
+  ansible.builtin.add_host:
+    name: "{{ wazuh_vm_name }}"
+    groups: wazuh_target
+    ansible_host: "{{ wazuh_vm_ip }}"
+    ansible_user: "{{ wazuh_ssh_user }}"
+    wazuh_selected_esxi: "{{ selected_esxi_host }}"
+    wazuh_selected_datastore: "{{ selected_datastore }}"

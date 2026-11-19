@@ -1,0 +1,50 @@
+---
+# =============================================================================
+# Playbook Principal AAP : Déploiement complet SIEM Wazuh (Single-Node)
+# 1. Sélection de l'hôte ESXi optimal (RAM/CPU) et provisioning VM RHEL 9
+# 2. Enregistrement Red Hat Satellite, LVM /var/lib/docker, Docker CE & Wazuh
+# 3. Création d'un snapshot VMware post-déploiement (point de rollback)
+# =============================================================================
+
+- name: "Phase 1 — Provisioning vCenter 8 (HQDCKN) sur l'hôte ESXi optimal"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+  roles:
+    - role: ../roles/vmware_provision
+
+- name: "Phase 2 — Configuration RHEL 9 (Satellite), Docker CE et Déploiement Wazuh"
+  hosts: wazuh_target
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../group_vars/all.yml
+  roles:
+    - role: ../roles/rhel_satellite
+    - role: ../roles/docker_engine
+    - role: ../roles/wazuh_single_node
+
+- name: "Phase 3 — Snapshot VMware post-déploiement (Stratégie de Rollback)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+  tasks:
+    - name: "Créer le snapshot VMware de référence post-déploiement"
+      community.vmware.vmware_guest_snapshot:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "{{ vcenter_folder }}"
+        name: "{{ wazuh_vm_name }}"
+        state: present
+        snapshot_name: "post-wazuh-deploy-{{ wazuh_version }}"
+        description: "Snapshot propre après déploiement SIEM Wazuh {{ wazuh_version }} via AAP"
+        memory_dump: false
+        quiesce: true
+      when: vcenter_take_post_snapshot | bool

@@ -1,0 +1,149 @@
+{
+  "name": "Déploiement SIEM Wazuh Single-Node (Solidaire Banque)",
+  "description": "Paramètres de provisioning VMware vCenter 8 (HQDCKN), réseau statique, Red Hat Satellite et Wazuh",
+  "spec": [
+    {
+      "question_name": "Nom de la VM Wazuh (Convention 14 chars)",
+      "question_description": "Ex: PINFVNIKNWAZ01 (Prod | INF | Virtuel | Non-PCI | Infra | Kinshasa | WAZ | 01)",
+      "required": true,
+      "type": "text",
+      "variable": "wazuh_vm_name",
+      "default": "PINFVNIKNWAZ01"
+    },
+    {
+      "question_name": "Adresse IP statique",
+      "question_description": "Adresse IPv4 statique de la VM SIEM Wazuh",
+      "required": true,
+      "type": "text",
+      "variable": "wazuh_vm_ip",
+      "default": "192.168.110.50"
+    },
+    {
+      "question_name": "Masque de sous-réseau",
+      "question_description": "Masque réseau au format décimal (ex: 255.255.255.0)",
+      "required": true,
+      "type": "text",
+      "variable": "wazuh_vm_netmask",
+      "default": "255.255.255.0"
+    },
+    {
+      "question_name": "Passerelle par défaut",
+      "question_description": "Adresse IP de la passerelle réseau du VLAN cible",
+      "required": true,
+      "type": "text",
+      "variable": "wazuh_vm_gateway",
+      "default": "192.168.110.1"
+    },
+    {
+      "question_name": "Domaine DNS",
+      "question_description": "Nom de domaine DNS de la VM",
+      "required": true,
+      "type": "text",
+      "variable": "wazuh_vm_domain",
+      "default": "solidairebanque.com"
+    },
+    {
+      "question_name": "Datacenter vCenter",
+      "question_description": "Nom du Datacenter VMware vCenter 8",
+      "required": true,
+      "type": "text",
+      "variable": "vcenter_datacenter",
+      "default": "HQDCKN"
+    },
+    {
+      "question_name": "Cluster ESXi cible (laisser vide pour hôtes standalone HQDCKN)",
+      "question_description": "Laisser vide pour évaluer automatiquement les 8 hôtes ESXi standalone de HQDCKN",
+      "required": false,
+      "type": "text",
+      "variable": "vcenter_cluster",
+      "default": ""
+    },
+    {
+      "question_name": "Template RHEL 9",
+      "question_description": "Nom du template RHEL 9 sur vCenter HQDCKN",
+      "required": true,
+      "type": "text",
+      "variable": "vcenter_template_name",
+      "default": "TMPL-RHEL9-GOLD"
+    },
+    {
+      "question_name": "Portgroup / VLAN Réseau",
+      "question_description": "Nom du Portgroup vCenter à attacher à la VM (ex: dvPG_VLAN110_DC_INFRA, PG_VLAN102_MGMT, VLAN_200)",
+      "required": true,
+      "type": "multiplechoice",
+      "choices": [
+        "dvPG_VLAN110_DC_INFRA",
+        "PG_VLAN102_MGMT",
+        "VLAN_110",
+        "VLAN_113",
+        "VLAN_200",
+        "VLAN_201",
+        "VM Network"
+      ],
+      "variable": "vcenter_network",
+      "default": "dvPG_VLAN110_DC_INFRA"
+    },
+    {
+      "question_name": "Datastore vCenter",
+      "question_description": "Laisser 'auto' pour sélectionner le datastore avec le plus d'espace libre sur l'ESXi retenu",
+      "required": true,
+      "type": "text",
+      "variable": "vcenter_datastore",
+      "default": "auto"
+    },
+    {
+      "question_name": "Nombre de vCPU",
+      "question_description": "Nombre de vCPU alloués à la VM",
+      "required": true,
+      "type": "integer",
+      "min": 2,
+      "max": 16,
+      "variable": "wazuh_vm_vcpu",
+      "default": 4
+    },
+    {
+      "question_name": "Mémoire RAM (Mo)",
+      "question_description": "Quantité de RAM en Mo (8192 = 8 Go, 16384 = 16 Go)",
+      "required": true,
+      "type": "integer",
+      "min": 4096,
+      "max": 65536,
+      "variable": "wazuh_vm_ram_mb",
+      "default": 8192
+    },
+    {
+      "question_name": "Taille du disque dédié Docker /var/lib/docker (Go)",
+      "question_description": "Taille du second disque dédié aux conteneurs et données Wazuh",
+      "required": true,
+      "type": "integer",
+      "min": 50,
+      "max": 2000,
+      "variable": "wazuh_vm_data_disk_gb",
+      "default": 100
+    },
+    {
+      "question_name": "Serveur Red Hat Satellite (FQDN)",
+      "question_description": "FQDN du serveur Red Hat Satellite Solidaire Banque",
+      "required": true,
+      "type": "text",
+      "variable": "satellite_server_fqdn",
+      "default": "satellite.solidairebanque.com"
+    },
+    {
+      "question_name": "Organisation Red Hat Satellite (label Katello)",
+      "question_description": "Label Katello de l'organisation SOLIDAIRE BANQUE",
+      "required": true,
+      "type": "text",
+      "variable": "satellite_org_id",
+      "default": "Default_Organization"
+    },
+    {
+      "question_name": "Version Wazuh (Tag Git wazuh-docker)",
+      "question_description": "Tag de release officiel du dépôt wazuh/wazuh-docker",
+      "required": true,
+      "type": "text",
+      "variable": "wazuh_version",
+      "default": "v4.9.2"
+    }
+  ]
+}

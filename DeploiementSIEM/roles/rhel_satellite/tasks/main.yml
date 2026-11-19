@@ -1,0 +1,102 @@
+---
+# =============================================================================
+# Rôle : rhel_satellite
+# Enregistre la VM RHEL 9 auprès de Red Hat Satellite, installe les paquets
+# prérequis système et prépare le volume LVM dédié à /var/lib/docker (100 Go).
+# =============================================================================
+
+- name: "Vérifier que les paramètres Red Hat Satellite sont renseignés"
+  ansible.builtin.assert:
+    that:
+      - satellite_server_fqdn | length > 0
+      - satellite_org_id | length > 0
+      - satellite_activation_key | length > 0
+    fail_msg: >-
+      Les paramètres Satellite (satellite_server_fqdn, satellite_org_id,
+      SATELLITE_ACTIVATION_KEY) doivent être configurés dans AAP.
+
+- name: "Vérifier si le certificat CA Satellite (katello-ca-consumer) est déjà installé"
+  ansible.builtin.command:
+    cmd: rpm -qa katello-ca-consumer*
+  register: katello_ca_check
+  changed_when: false
+  failed_when: false
+
+- name: "Installer le paquet katello-ca-consumer depuis Red Hat Satellite"
+  ansible.builtin.dnf:
+    name: "{{ satellite_ca_rpm_url }}"
+    state: present
+    disable_gpg_check: true
+  when: katello_ca_check.stdout | length == 0
+
+- name: "Enregistrer la VM RHEL 9 sur Red Hat Satellite via Activation Key"
+  community.general.redhat_subscription:
+    state: present
+    org_id: "{{ satellite_org_id }}"
+    activationkey: "{{ satellite_activation_key }}"
+    force_register: "{{ satellite_force_register }}"
+  no_log: true
+
+- name: "Rafraîchir le cache DNF et vérifier les dépôts Satellite"
+  ansible.builtin.command:
+    cmd: dnf repolist --enabled
+  register: dnf_repolist
+  changed_when: false
+
+- name: "Installer les paquets système prérequis depuis Satellite"
+  ansible.builtin.dnf:
+    name:
+      - dnf-plugins-core
+      - git
+      - lvm2
+      - xfsprogs
+      - firewalld
+      - curl
+      - ca-certificates
+      - policycoreutils-python-utils
+    state: present
+    update_cache: true
+
+# --- Préparation du disque dédié 100 Go pour /var/lib/docker ---
+- name: "Vérifier la présence du disque dédié {{ docker_data_device }}"
+  ansible.builtin.stat:
+    path: "{{ docker_data_device }}"
+  register: docker_disk_stat
+
+- name: "Configurer LVM et monter {{ docker_data_mount }} sur {{ docker_data_device }}"
+  when: docker_disk_stat.stat.exists
+  block:
+    - name: "Créer le Volume Group {{ docker_vg_name }} sur {{ docker_data_device }}"
+      community.general.lvg:
+        vg: "{{ docker_vg_name }}"
+        pvs: "{{ docker_data_device }}"
+        state: present
+
+    - name: "Créer le Logical Volume {{ docker_lv_name }} (100% de l'espace libre)"
+      community.general.lvol:
+        vg: "{{ docker_vg_name }}"
+        lv: "{{ docker_lv_name }}"
+        size: "100%FREE"
+        state: present
+
+    - name: "Formater le volume {{ docker_lv_name }} en XFS (ftype=1 requis pour overlay2)"
+      community.general.filesystem:
+        fstype: xfs
+        dev: "/dev/{{ docker_vg_name }}/{{ docker_lv_name }}"
+        opts: "-n ftype=1"
+
+    - name: "Créer le point de montage {{ docker_data_mount }}"
+      ansible.builtin.file:
+        path: "{{ docker_data_mount }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0711"
+
+    - name: "Monter {{ docker_data_mount }} de manière persistante dans /etc/fstab"
+      ansible.posix.mount:
+        path: "{{ docker_data_mount }}"
+        src: "/dev/{{ docker_vg_name }}/{{ docker_lv_name }}"
+        fstype: xfs
+        opts: defaults,noatime
+        state: mounted

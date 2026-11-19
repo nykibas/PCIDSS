@@ -1,0 +1,93 @@
+---
+# =============================================================================
+# Variables par défaut — Déploiement SIEM Wazuh (Single-Node) via AAP
+# Environnement : Solidaire Banque (vCenter HQDCKN / Satellite / AAP)
+# Les secrets sont injectés via les Credentials AAP (jamais en clair dans Git).
+# =============================================================================
+
+# --- VMware vCenter 8 (Credential AAP : "vCenter Solidaire Banque") ---
+vcenter_hostname: "{{ lookup('env', 'VMWARE_HOST') | default('192.168.102.10', true) }}"
+vcenter_username: "{{ lookup('env', 'VMWARE_USER') | default('', true) }}"
+vcenter_password: "{{ lookup('env', 'VMWARE_PASSWORD') | default('', true) }}"
+vcenter_validate_certs: false
+
+vcenter_datacenter: "HQDCKN"
+# Laisser vide pour les hôtes ESXi standalone de HQDCKN (CBSHQRHL ne contient aucun hôte)
+vcenter_cluster: ""
+# Liste des hôtes ESXi éligibles dans HQDCKN (utilisée si vcenter_cluster est vide)
+vcenter_esxi_hosts:
+  - "192.168.201.200"
+  - "192.168.102.23"
+  - "192.168.102.27"
+  - "192.168.102.22"
+  - "192.168.102.28"
+  - "192.168.102.26"
+  - "192.168.102.24"
+  - "192.168.102.21"
+vcenter_folder: "/HQDCKN/vm"
+vcenter_template_name: "TMPL-RHEL9-GOLD"
+vcenter_network: "dvPG_VLAN110_DC_INFRA"
+# "auto" sélectionne automatiquement le datastore accessible sur l'ESXi retenu avec le plus d'espace libre
+vcenter_datastore: "auto"
+# Poids de l'algorithme de sélection de l'hôte ESXi optimal (somme = 1.0)
+esxi_score_weight_ram: 0.6
+esxi_score_weight_cpu: 0.4
+# Création d'un snapshot VMware post-déploiement pour rollback rapide
+vcenter_take_post_snapshot: true
+
+# --- Spécifications de la VM Wazuh (Convention Solidaire Banque 14 chars) ---
+# PINFVNIKNWAZ01 = Prod | INF | Virtuel | Non-PCI | Infra | Kinshasa | WAZ | 01
+wazuh_vm_name: "PINFVNIKNWAZ01"
+wazuh_vm_vcpu: 4
+wazuh_vm_ram_mb: 8192
+wazuh_vm_data_disk_gb: 100
+wazuh_vm_ip: "192.168.110.50"
+wazuh_vm_netmask: "255.255.255.0"
+wazuh_vm_gateway: "192.168.110.1"
+wazuh_vm_dns_servers:
+  - "192.168.13.5"
+  - "192.168.13.6"
+wazuh_vm_domain: "solidairebanque.com"
+wazuh_vm_timezone: "Africa/Kinshasa"
+
+# Utilisateur SSH du Credential AAP "Local Admin" (id=4)
+wazuh_ssh_user: "ladmin"
+
+# --- Red Hat Satellite (Solidaire Banque) ---
+satellite_server_fqdn: "satellite.solidairebanque.com"
+# Label Katello officiel de l'organisation "SOLIDAIRE BANQUE"
+satellite_org_id: "Default_Organization"
+satellite_activation_key: "{{ lookup('env', 'SATELLITE_ACTIVATION_KEY') | default('ak_rhel9_prd', true) }}"
+satellite_ca_rpm_url: "http://{{ satellite_server_fqdn }}/pub/katello-ca-consumer-latest.noarch.rpm"
+satellite_force_register: false
+
+# --- Stockage dédié Docker ---
+docker_data_device: "/dev/sdb"
+docker_vg_name: "vg_docker"
+docker_lv_name: "lv_docker"
+docker_data_mount: "/var/lib/docker"
+
+# --- Docker CE (accès Internet direct) ---
+docker_ce_repo_url: "https://download.docker.com/linux/rhel/docker-ce.repo"
+docker_log_max_size: "50m"
+docker_log_max_file: "3"
+
+# --- Stack SIEM Wazuh (Single-Node) ---
+wazuh_version: "v4.9.2"
+wazuh_repo_url: "https://github.com/wazuh/wazuh-docker.git"
+wazuh_install_dir: "/opt/wazuh-docker"
+wazuh_single_node_dir: "{{ wazuh_install_dir }}/single-node"
+
+# Dimensionnement JVM OpenSearch adapté à 8 Go de RAM
+wazuh_indexer_java_opts: "-Xms2g -Xmx2g"
+
+# Ports Firewalld ouverts (principe du moindre privilège)
+wazuh_firewall_ports:
+  - "443/tcp"   # Wazuh Dashboard HTTPS
+  - "1514/tcp"  # Communication agents Wazuh
+  - "1515/tcp"  # Enrôlement automatique des agents Wazuh
+
+# Durcissement optionnel des secrets Wazuh via Custom Credential AAP
+wazuh_indexer_admin_password: "{{ lookup('env', 'WAZUH_INDEXER_PASSWORD') | default('', true) }}"
+wazuh_api_password: "{{ lookup('env', 'WAZUH_API_PASSWORD') | default('', true) }}"
+wazuh_dashboard_password: "{{ lookup('env', 'WAZUH_DASHBOARD_PASSWORD') | default('', true) }}"

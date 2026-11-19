@@ -1,0 +1,66 @@
+---
+# =============================================================================
+# Rôle : docker_engine
+# Installe Docker CE et Docker Compose v2 sur RHEL 9 (accès Internet direct)
+# conformément au guide deploy-wazuh-rhel.md.
+# =============================================================================
+
+- name: "Supprimer les paquets Podman/runc susceptibles d'entrer en conflit avec Docker CE"
+  ansible.builtin.dnf:
+    name:
+      - podman
+      - podman-docker
+      - buildah
+      - runc
+    state: absent
+
+- name: "Ajouter le dépôt officiel Docker CE pour RHEL"
+  ansible.builtin.get_url:
+    url: "{{ docker_ce_repo_url }}"
+    dest: /etc/yum.repos.d/docker-ce.repo
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: "Installer Docker Engine, containerd et Docker Compose Plugin"
+  ansible.builtin.dnf:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: "Créer le répertoire de configuration /etc/docker"
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "Déployer /etc/docker/daemon.json (rotation des logs et driver overlay2)"
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart docker
+
+- name: "Activer et démarrer le service Docker"
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: "Appliquer immédiatement les handlers Docker si la configuration a changé"
+  ansible.builtin.meta: flush_handlers
+
+- name: "Vérifier que Docker Compose v2 est opérationnel"
+  ansible.builtin.command:
+    cmd: docker compose version
+  register: docker_compose_ver
+  changed_when: false

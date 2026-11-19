@@ -98,14 +98,13 @@
 - name: "Sélectionner automatiquement le datastore avec le plus d'espace libre sur {{ selected_esxi_host }}"
   when: vcenter_datastore == 'auto' or vcenter_datastore | length == 0
   block:
-    - name: "Lister les datastores accessibles sur l'hôte ESXi {{ selected_esxi_host }}"
+    - name: "Lister les datastores accessibles dans le datacenter {{ vcenter_datacenter }}"
       community.vmware.vmware_datastore_info:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ vcenter_validate_certs }}"
         datacenter: "{{ vcenter_datacenter }}"
-        esxi_hostname: "{{ selected_esxi_host }}"
       register: datastore_info
 
     - name: "Filtrer les datastores éligibles (espace libre >= {{ wazuh_vm_data_disk_gb | int + 60 }} Go)"

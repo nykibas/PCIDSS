@@ -43,29 +43,77 @@
     regexp: 'OPENSEARCH_JAVA_OPTS=-Xms\w+\s+-Xmx\w+'
     replace: "OPENSEARCH_JAVA_OPTS={{ wazuh_indexer_java_opts }}"
 
-# --- Étape 4 : Durcissement optionnel des secrets (injectés via AAP Credentials) ---
-- name: "Mettre à jour le mot de passe Indexer dans docker-compose.yml si fourni"
-  ansible.builtin.replace:
-    path: "{{ wazuh_single_node_dir }}/docker-compose.yml"
-    regexp: 'INDEXER_PASSWORD=SecretPassword'
-    replace: "INDEXER_PASSWORD={{ wazuh_indexer_admin_password }}"
+# --- Étape 4 : Durcissement des secrets (injectés via AAP Credentials) ---
+- name: "Générer le hash bcrypt OpenSearch pour le compte admin (Indexer)"
+  ansible.builtin.command:
+    cmd: >-
+      docker run --rm
+      --entrypoint /usr/share/wazuh-indexer/plugins/opensearch-security/tools/hash.sh
+      wazuh/wazuh-indexer:{{ wazuh_version | regex_replace('^v', '') }}
+      -p {{ wazuh_indexer_admin_password | quote }}
+  register: wazuh_admin_hash_cmd
   when: wazuh_indexer_admin_password | length > 0
   no_log: true
+  changed_when: false
 
-- name: "Mettre à jour le mot de passe API Wazuh dans docker-compose.yml si fourni"
-  ansible.builtin.replace:
-    path: "{{ wazuh_single_node_dir }}/docker-compose.yml"
-    regexp: 'API_PASSWORD=MyS3cr37P450r\.\*-'
-    replace: "API_PASSWORD={{ wazuh_api_password }}"
-  when: wazuh_api_password | length > 0
-  no_log: true
-
-- name: "Mettre à jour le mot de passe Dashboard dans docker-compose.yml si fourni"
-  ansible.builtin.replace:
-    path: "{{ wazuh_single_node_dir }}/docker-compose.yml"
-    regexp: 'DASHBOARD_PASSWORD=kibanaserver'
-    replace: "DASHBOARD_PASSWORD={{ wazuh_dashboard_password }}"
+- name: "Générer le hash bcrypt OpenSearch pour le compte kibanaserver (Dashboard)"
+  ansible.builtin.command:
+    cmd: >-
+      docker run --rm
+      --entrypoint /usr/share/wazuh-indexer/plugins/opensearch-security/tools/hash.sh
+      wazuh/wazuh-indexer:{{ wazuh_version | regex_replace('^v', '') }}
+      -p {{ wazuh_dashboard_password | quote }}
+  register: wazuh_kibana_hash_cmd
   when: wazuh_dashboard_password | length > 0
+  no_log: true
+  changed_when: false
+
+- name: "Mettre à jour les mots de passe dans docker-compose.yml, internal_users.yml et wazuh.yml"
+  ansible.builtin.command:
+    cmd: python3 -c "
+      import os, re
+      base = os.environ['WAZUH_DIR']
+      dc_path = os.path.join(base, 'docker-compose.yml')
+      iu_path = os.path.join(base, 'config', 'wazuh_indexer', 'internal_users.yml')
+      wy_path = os.path.join(base, 'config', 'wazuh_dashboard', 'wazuh.yml')
+
+      dc = open(dc_path, encoding='utf-8').read()
+      iu = open(iu_path, encoding='utf-8').read()
+      wy = open(wy_path, encoding='utf-8').read()
+
+      idx_pw = os.environ.get('NEW_IDX_PW', '')
+      idx_lines = [l.strip() for l in os.environ.get('NEW_IDX_HASH', '').splitlines() if l.strip().startswith('$2')]
+      idx_hash = idx_lines[-1] if idx_lines else ''
+      api_pw = os.environ.get('NEW_API_PW', '')
+      dash_pw = os.environ.get('NEW_DASH_PW', '')
+      dash_lines = [l.strip() for l in os.environ.get('NEW_DASH_HASH', '').splitlines() if l.strip().startswith('$2')]
+      dash_hash = dash_lines[-1] if dash_lines else ''
+
+      if idx_pw and idx_hash:
+          dc = dc.replace('INDEXER_PASSWORD=SecretPassword', 'INDEXER_PASSWORD=' + idx_pw)
+          iu = re.sub(r'(?m)(^admin:\s*\n\s*hash:\s*)\"[^\"]*\"', lambda m: m.group(1) + '\"' + idx_hash + '\"', iu)
+      if dash_pw and dash_hash:
+          dc = dc.replace('DASHBOARD_PASSWORD=kibanaserver', 'DASHBOARD_PASSWORD=' + dash_pw)
+          iu = re.sub(r'(?m)(^kibanaserver:\s*\n\s*hash:\s*)\"[^\"]*\"', lambda m: m.group(1) + '\"' + dash_hash + '\"', iu)
+      if api_pw:
+          dc = dc.replace('API_PASSWORD=MyS3cr37P450r.*-', 'API_PASSWORD=' + api_pw)
+          wy = wy.replace('MyS3cr37P450r.*-', api_pw)
+
+      open(dc_path, 'w', encoding='utf-8').write(dc)
+      open(iu_path, 'w', encoding='utf-8').write(iu)
+      open(wy_path, 'w', encoding='utf-8').write(wy)
+      "
+  environment:
+    WAZUH_DIR: "{{ wazuh_single_node_dir }}"
+    NEW_IDX_PW: "{{ wazuh_indexer_admin_password }}"
+    NEW_IDX_HASH: "{{ wazuh_admin_hash_cmd.stdout | default('') }}"
+    NEW_API_PW: "{{ wazuh_api_password }}"
+    NEW_DASH_PW: "{{ wazuh_dashboard_password }}"
+    NEW_DASH_HASH: "{{ wazuh_kibana_hash_cmd.stdout | default('') }}"
+  when: >-
+    (wazuh_indexer_admin_password | length > 0) or
+    (wazuh_api_password | length > 0) or
+    (wazuh_dashboard_password | length > 0)
   no_log: true
 
 # --- Étape 5 : Génération idempotente des certificats SSL internes ---
